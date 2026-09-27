@@ -1,163 +1,140 @@
-// =========================================================================
-// BRYX SAAS — ENGINE DA WEBHOOK DA LOGZZ (100% COMPATÍVEL COM SUPABASE)
-// REPOSITÓRIO: henriqueprals-code/bh-webhook-api
-// ENDPOINT: https://bh-webhook-api.vercel.app/api/webhook?slug=SEU_SLUG
-// =========================================================================
+import { NextRequest, NextResponse } from 'next/server';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || "https://nkueyeaqhfkzcepqbxkk.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "sb_publishable_MzEdLWuinPdJWASPBBIm9Q_tCP3ceY7";
+// Configurações do Supabase (lê das variáveis de ambiente da Vercel ou usa os fallbacks do seu projeto)
+const SUPABASE_URL = (process.env.SUPABASE_URL || "https://nkueyeaqhfkzcepqbxkk.supabase.co").trim().replace(/\/+$/, '');
+const SUPABASE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "sb_publishable_MzEdLWuinPdJWASPBBIm9Q_tCP3ceY7").trim();
 
-function parseMoneyLogzz(val) {
-  if (typeof val === 'number') return val;
-  if (!val) return 0;
-  const s = String(val).trim().replace(/[^\d,\.-]/g, '');
-  if (s.includes(',') && s.includes('.')) {
-    return parseFloat(s.replace(/\./g, '').replace(',', '.')) || 0;
-  }
-  if (s.includes(',')) {
-    return parseFloat(s.replace(',', '.')) || 0;
-  }
-  return parseFloat(s) || 0;
-}
-
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, apikey, Authorization'
-  );
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  // 1. Identificação Blindada da Operação (?slug=jhonyelly)
-  let rawSlug = '';
-  if (req.query && (req.query.slug || req.query.user || req.query.usuario)) {
-    rawSlug = req.query.slug || req.query.user || req.query.usuario;
-  }
-  if (!rawSlug && req.url) {
-    try {
-      const parsedUrl = new URL(req.url, 'https://bh-webhook-api.vercel.app');
-      rawSlug = parsedUrl.searchParams.get('slug') || parsedUrl.searchParams.get('user') || parsedUrl.searchParams.get('usuario');
-    } catch(e){}
-  }
-
-  const body = req.body || {};
-
-  if (!rawSlug && body.integration && body.integration.link) {
-    try {
-      const parsedLink = new URL(body.integration.link);
-      rawSlug = parsedLink.searchParams.get('slug') || parsedLink.searchParams.get('user');
-    } catch(e){}
-  }
-
-  if (!rawSlug && body.affiliate_name && body.affiliate_name.toLowerCase().includes('jhonyelly')) {
-    rawSlug = 'jhonyelly';
-  }
-
-  rawSlug = (rawSlug || 'master').toString().toLowerCase().trim().replace(/[^a-z0-9_-]/g, '');
-  const isMaster = rawSlug === 'master' || rawSlug === 'gustavo' || !rawSlug;
-  const targetTable = isMaster ? 'orders' : `orders_${rawSlug}`;
-
-  if (req.method === 'GET') {
-    return res.status(200).json({
-      status: 'online',
-      service: 'BRYX Logzz Webhook API Engine',
-      operation_slug: rawSlug,
-      target_table: targetTable,
-      endpoint_url: `https://bh-webhook-api.vercel.app/api/webhook?slug=${rawSlug}`
-    });
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Método não permitido. Utilize POST.' });
-  }
-
+export async function POST(req: NextRequest) {
   try {
-    // 2. Extração Exata dos Campos da Logzz
-    const orderId = String(
-      body.order_number || body.id || body.code || body.codigo || body.order_id || body.pedido_id || ('lgz_' + Date.now())
-    ).trim();
+    // 1. Identifica a operação via parâmetro ?slug= (ex: ?slug=jhonyelly ou ?slug=master)
+    const { searchParams } = new URL(req.url);
+    const slug = (searchParams.get('slug') || 'master').toLowerCase().trim();
 
-    const customer = String(
-      body.client_name || body.cliente_nome || body.customer_name || body.customer || body.cliente || body.nome || 'Cliente'
-    ).trim();
-
-    const phone = String(
-      body.client_phone || body.cliente_telefone || body.cliente?.celular || body.telefone || body.phone || body.whatsapp || ''
-    ).trim();
-
-    const product = String(
-      body.products?.main?.product_name || body.produto?.nome || body.produto_nome || body.produto || body.product || 'Produto Geral'
-    ).trim();
-
-    const rawStatus = String(body.order_status || body.status || body.situacao || 'Agendado').trim();
-
-    const totalVal = parseMoneyLogzz(body.order_final_price || body.valor_total || body.total || body.valor || body.value || 0);
-    const commVal = parseMoneyLogzz(body.commission || body.affiliate_commission || body.comissao || 0);
-
-    const dateVal = String(
-      body.date_order || body.data_criacao || body.data_agendamento || body.data_pedido || body.date || body.created_at || new Date().toISOString().split('T')[0]
-    ).trim();
-
-    const deliveryVal = String(
-      body.date_delivery || body.data_entrega || body.delivery_date || body.data_prevista || body.delivery || ''
-    ).trim();
-
-    // 3. Montagem Exata das 10 Colunas que existem na tabela orders_jhonyelly
-    let payload = {
-      id: orderId,
-      code: orderId,
-      customer: customer,
-      phone: phone,
-      product: product,
-      total: totalVal,
-      commission: commVal,
-      status: rawStatus,
-      date: dateVal,
-      delivery_date: deliveryVal || null
-    };
-
-    // 4. Gravação no Supabase via REST API (Upsert)
-    const supabaseEndpoint = `\({SUPABASE_URL}/rest/v1/\){targetTable}`;
-
-    const response = await fetch(supabaseEndpoint, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=representation'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`Erro ao salvar no Supabase (${targetTable}):`, errText);
-      return res.status(400).json({
-        success: false,
-        error: 'Erro Supabase',
-        details: errText
-      });
+    // Determina a tabela correta no Supabase
+    let targetTable = 'orders';
+    if (slug === 'jhonyelly') {
+      targetTable = 'orders_jhonyelly';
+    } else if (slug !== 'master' && slug !== 'gustavo') {
+      targetTable = `orders_${slug.replace(/[^a-z0-9_]/gi, '')}`;
     }
 
-    return res.status(200).json({
-      success: true,
-      message: 'Pedido da Logzz gravado com sucesso no BRYX!',
-      target_table: targetTable,
-      order_id: orderId,
-      customer: customer
+    // 2. Lê o payload JSON enviado pela Logzz
+    const body = await req.json();
+
+    if (!body) {
+      return NextResponse.json({ success: false, error: 'Payload vazio' }, { status: 400 });
+    }
+
+    // 3. Sanitização de Valores Monetários (converte vírgula da Logzz para float)
+    const rawTotal = body.order_final_price || body.total || body.price || '0';
+    const total = parseFloat(String(rawTotal).replace(',', '.')) || 0;
+
+    const rawComm = body.affiliate_commission || body.commission || body.producer_commission || '0';
+    const commission = parseFloat(String(rawComm).replace(',', '.')) || 0;
+
+    // 4. Conversão de Datas (converte DD.MM.YYYY da Logzz para YYYY-MM-DD do banco)
+    let delivery_date = new Date().toISOString().split('T')[0];
+    if (body.date_delivery) {
+      const parts = String(body.date_delivery).trim().split(' ')[0].split('.');
+      if (parts.length === 3) {
+        delivery_date = `\({parts}-\){parts}-${parts[0]}`;
+      } else {
+        delivery_date = body.date_delivery;
+      }
+    }
+
+    let date = new Date().toISOString().split('T')[0];
+    if (body.date_order) {
+      const parts = String(body.date_order).trim().split(' ')[0].split('.');
+      if (parts.length === 3) {
+        date = `\({parts}-\){parts}-${parts[0]}`;
+      }
+    }
+
+    // 5. Identificação do Produto e Variações
+    const product = body.products?.main?.product_name || body.product_name || body.product || 'Produto Padrão';
+    const offer = body.products?.main?.variations?.[0]?.product_name || 'Padrão';
+
+    // 6. Tratamento do ID do Pedido
+    // Gera ID numérico caso o banco exija inteiro, ou preserva o código da Logzz
+    let orderId: any = body.order_number || body.code || body.id;
+    if (!orderId || isNaN(Number(orderId))) {
+      orderId = Math.floor(10000000 + Math.random() * 90000000);
+    } else {
+      orderId = Number(orderId);
+    }
+
+    // 7. Monta o registro sanitizado para o Supabase
+    const orderRecord = {
+      id: orderId,
+      customer: body.client_name || body.customer || 'Cliente Logzz',
+      phone: body.client_phone || body.phone || '',
+      product: product,
+      offer: offer,
+      status: body.order_status || 'Agendado',
+      total: total,
+      commission: commission,
+      date: date,
+      delivery_date: delivery_date,
+      city: body.client_address_city || '',
+      state: body.client_address_state || '',
+      address: body.client_address 
+        ? `\({body.client_address},\){body.client_address_number || ''} ${body.client_address_district || ''}`.trim() 
+        : ''
+    };
+
+    // 8. Monta a URL REST válida do Supabase (sem parênteses quebrados)
+    const restUrl = `\({SUPABASE_URL}/rest/v1/\){targetTable}`;
+
+    // 9. Envia para o Supabase via Upsert (insere novo ou atualiza existente)
+    const supabaseResponse = await fetch(restUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Prefer': 'resolution=merge-duplicates,return=representation'
+      },
+      body: JSON.stringify([orderRecord])
     });
 
-  } catch (error) {
-    console.error('Erro interno:', error);
-    return res.status(500).json({
+    if (!supabaseResponse.ok) {
+      const errDetails = await supabaseResponse.text();
+      console.error(`Erro ao inserir no Supabase (${targetTable}):`, errDetails);
+      return NextResponse.json({ 
+        success: false, 
+        error: 'Erro retornado pelo banco Supabase',
+        details: errDetails 
+      }, { status: 400 });
+    }
+
+    const savedData = await supabaseResponse.json();
+
+    return NextResponse.json({
+      success: true,
+      message: 'Pedido processado e salvo com sucesso!',
+      table: targetTable,
+      data: savedData
+    }, { status: 200 });
+
+  } catch (error: any) {
+    console.error('Erro na execução do Webhook:', error);
+    return NextResponse.json({
       success: false,
-      error: error.message
-    });
+      error: 'Erro interno ao processar webhook',
+      message: error?.message || 'Erro desconhecido'
+    }, { status: 500 });
   }
-};
+}
+
+// Suporte a requisição GET para teste rápido no navegador
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const slug = searchParams.get('slug') || 'master';
+  return NextResponse.json({
+    status: 'online',
+    message: 'BRYX Webhook API ativa e operacional',
+    slug_recebido: slug,
+    supabase_url: SUPABASE_URL
+  });
+}
