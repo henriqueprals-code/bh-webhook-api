@@ -1,5 +1,5 @@
 // =========================================================================
-// BRYX SAAS — ENGINE DA WEBHOOK DA LOGZZ (VERSÃO OFICIAL PRODUÇÃO)
+// BRYX SAAS — ENGINE DA WEBHOOK DA LOGZZ (100% COMPATÍVEL COM SUPABASE)
 // REPOSITÓRIO: henriqueprals-code/bh-webhook-api
 // ENDPOINT: https://bh-webhook-api.vercel.app/api/webhook?slug=SEU_SLUG
 // =========================================================================
@@ -33,23 +33,42 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  const rawSlug = (req.query.slug || req.query.user || req.query.usuario || 'master')
-    .toString()
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9_-]/g, '');
+  // 1. Identificação Blindada da Operação (?slug=jhonyelly)
+  let rawSlug = '';
+  if (req.query && (req.query.slug || req.query.user || req.query.usuario)) {
+    rawSlug = req.query.slug || req.query.user || req.query.usuario;
+  }
+  if (!rawSlug && req.url) {
+    try {
+      const parsedUrl = new URL(req.url, 'https://bh-webhook-api.vercel.app');
+      rawSlug = parsedUrl.searchParams.get('slug') || parsedUrl.searchParams.get('user') || parsedUrl.searchParams.get('usuario');
+    } catch(e){}
+  }
 
+  const body = req.body || {};
+
+  if (!rawSlug && body.integration && body.integration.link) {
+    try {
+      const parsedLink = new URL(body.integration.link);
+      rawSlug = parsedLink.searchParams.get('slug') || parsedLink.searchParams.get('user');
+    } catch(e){}
+  }
+
+  if (!rawSlug && body.affiliate_name && body.affiliate_name.toLowerCase().includes('jhonyelly')) {
+    rawSlug = 'jhonyelly';
+  }
+
+  rawSlug = (rawSlug || 'master').toString().toLowerCase().trim().replace(/[^a-z0-9_-]/g, '');
   const isMaster = rawSlug === 'master' || rawSlug === 'gustavo' || !rawSlug;
   const targetTable = isMaster ? 'orders' : `orders_${rawSlug}`;
 
   if (req.method === 'GET') {
     return res.status(200).json({
       status: 'online',
-      service: 'BRYX Logzz Webhook API Engine (Produção)',
+      service: 'BRYX Logzz Webhook API Engine',
       operation_slug: rawSlug,
       target_table: targetTable,
-      endpoint_url: `https://bh-webhook-api.vercel.app/api/webhook?slug=${rawSlug}`,
-      timestamp: new Date().toISOString()
+      endpoint_url: `https://bh-webhook-api.vercel.app/api/webhook?slug=${rawSlug}`
     });
   }
 
@@ -58,11 +77,9 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const body = req.body || {};
-
-    // 1. Extração Cirúrgica dos Campos Oficiais da Logzz
+    // 2. Extração Exata dos Campos da Logzz
     const orderId = String(
-      body.order_number || body.id || body.code || body.codigo || body.order_id || body.pedido_id || body.uuid || ('lgz_' + Date.now())
+      body.order_number || body.id || body.code || body.codigo || body.order_id || body.pedido_id || ('lgz_' + Date.now())
     ).trim();
 
     const customer = String(
@@ -75,10 +92,6 @@ module.exports = async (req, res) => {
 
     const product = String(
       body.products?.main?.product_name || body.produto?.nome || body.produto_nome || body.produto || body.product || 'Produto Geral'
-    ).trim();
-
-    const offer = String(
-      body.products?.main?.variations?.[0]?.product_name || body.oferta_nome || body.oferta || body.offer || '1 UN'
     ).trim();
 
     const rawStatus = String(body.order_status || body.status || body.situacao || 'Agendado').trim();
@@ -94,88 +107,57 @@ module.exports = async (req, res) => {
       body.date_delivery || body.data_entrega || body.delivery_date || body.data_prevista || body.delivery || ''
     ).trim();
 
-    const cityVal = String(body.client_address_city || body.cidade || '').trim();
-    const stateVal = String(body.client_address_state || body.estado || '').trim();
-
-    // 2. Montagem do Objeto Exato das Colunas do Supabase
-    let currentPayload = {
+    // 3. Montagem Exata das 10 Colunas que existem na tabela orders_jhonyelly
+    let payload = {
       id: orderId,
       code: orderId,
-      customer,
-      phone,
-      product,
-      offer,
-      status: rawStatus,
+      customer: customer,
+      phone: phone,
+      product: product,
       total: totalVal,
-      value: totalVal,
       commission: commVal,
+      status: rawStatus,
       date: dateVal,
-      delivery_date: deliveryVal || null,
-      cidade: cityVal,
-      estado: stateVal,
-      unidade: cityVal ? `\({cityVal} -\){stateVal}` : ''
+      delivery_date: deliveryVal || null
     };
 
-    // 3. Gravação com Auto-Healing no Supabase
+    // 4. Gravação no Supabase via REST API (Upsert)
     const supabaseEndpoint = `\({SUPABASE_URL}/rest/v1/\){targetTable}`;
-    let success = false;
-    let lastError = null;
 
-    for (let attempt = 0; attempt < 6; attempt++) {
-      const response = await fetch(supabaseEndpoint, {
-        method: 'POST',
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'resolution=merge-duplicates,return=representation'
-        },
-        body: JSON.stringify(currentPayload)
-      });
+    const response = await fetch(supabaseEndpoint, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=representation'
+      },
+      body: JSON.stringify(payload)
+    });
 
-      if (response.ok) {
-        success = true;
-        break;
-      }
-
+    if (!response.ok) {
       const errText = await response.text();
-      lastError = errText;
-
-      // Se a tabela não tiver alguma coluna específica, remove e reenvia no mesmo milissegundo
-      const matchCol = errText.match(/Could not find the '([^']+)' column/i);
-      if (matchCol && matchCol) {
-        delete currentPayload[matchCol[1]];
-        continue;
-      } else {
-        break;
-      }
-    }
-
-    if (!success) {
-      console.error(`Erro ao salvar no Supabase (${targetTable}):`, lastError);
+      console.error(`Erro ao salvar no Supabase (${targetTable}):`, errText);
       return res.status(400).json({
         success: false,
-        error: 'Falha ao gravar pedido no banco',
-        target_table: targetTable,
-        details: lastError
+        error: 'Erro Supabase',
+        details: errText
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Pedido processado e sincronizado no BRYX!',
+      message: 'Pedido da Logzz gravado com sucesso no BRYX!',
       target_table: targetTable,
       order_id: orderId,
-      customer,
-      status: rawStatus
+      customer: customer
     });
 
   } catch (error) {
     console.error('Erro interno:', error);
     return res.status(500).json({
       success: false,
-      error: 'Erro interno ao processar webhook',
-      message: error.message
+      error: error.message
     });
   }
 };
