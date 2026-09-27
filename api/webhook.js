@@ -1,16 +1,36 @@
-import { NextRequest, NextResponse } from 'next/server';
-
-// Configurações do Supabase (lê das variáveis de ambiente da Vercel ou usa os fallbacks do seu projeto)
+// Configurações do Supabase
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://nkueyeaqhfkzcepqbxkk.supabase.co").trim().replace(/\/+$/, '');
 const SUPABASE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "sb_publishable_MzEdLWuinPdJWASPBBIm9Q_tCP3ceY7").trim();
 
-export async function POST(req: NextRequest) {
+export default async function handler(req, res) {
+  // Libera CORS para evitar bloqueios
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  // Permite testar pelo navegador com requisição GET
+  if (req.method === 'GET') {
+    const slug = (req.query?.slug || 'master').toLowerCase().trim();
+    return res.status(200).json({
+      status: 'online',
+      message: 'BRYX Webhook API ativa e operacional',
+      slug_recebido: slug,
+      supabase_url: SUPABASE_URL
+    });
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, error: 'Método não permitido' });
+  }
+
   try {
     // 1. Identifica a operação via parâmetro ?slug= (ex: ?slug=jhonyelly ou ?slug=master)
-    const { searchParams } = new URL(req.url);
-    const slug = (searchParams.get('slug') || 'master').toLowerCase().trim();
+    const slug = (req.query?.slug || 'master').toLowerCase().trim();
 
-    // Determina a tabela correta no Supabase
     let targetTable = 'orders';
     if (slug === 'jhonyelly') {
       targetTable = 'orders_jhonyelly';
@@ -18,11 +38,11 @@ export async function POST(req: NextRequest) {
       targetTable = `orders_${slug.replace(/[^a-z0-9_]/gi, '')}`;
     }
 
-    // 2. Lê o payload JSON enviado pela Logzz
-    const body = await req.json();
+    // 2. Lê o payload JSON da Logzz
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
 
-    if (!body) {
-      return NextResponse.json({ success: false, error: 'Payload vazio' }, { status: 400 });
+    if (!body || Object.keys(body).length === 0) {
+      return res.status(400).json({ success: false, error: 'Payload vazio recebido' });
     }
 
     // 3. Sanitização de Valores Monetários (converte vírgula da Logzz para float)
@@ -32,7 +52,7 @@ export async function POST(req: NextRequest) {
     const rawComm = body.affiliate_commission || body.commission || body.producer_commission || '0';
     const commission = parseFloat(String(rawComm).replace(',', '.')) || 0;
 
-    // 4. Conversão de Datas (converte DD.MM.YYYY da Logzz para YYYY-MM-DD do banco)
+    // 4. Conversão de Datas (converte DD.MM.YYYY da Logzz para YYYY-MM-DD do Postgres)
     let delivery_date = new Date().toISOString().split('T')[0];
     if (body.date_delivery) {
       const parts = String(body.date_delivery).trim().split(' ')[0].split('.');
@@ -51,20 +71,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 5. Identificação do Produto e Variações
+    // 5. Produto e Variações
     const product = body.products?.main?.product_name || body.product_name || body.product || 'Produto Padrão';
     const offer = body.products?.main?.variations?.[0]?.product_name || 'Padrão';
 
-    // 6. Tratamento do ID do Pedido
-    // Gera ID numérico caso o banco exija inteiro, ou preserva o código da Logzz
-    let orderId: any = body.order_number || body.code || body.id;
+    // 6. ID do Pedido (compatível com tipo numérico do Supabase)
+    let orderId = body.order_number || body.code || body.id;
     if (!orderId || isNaN(Number(orderId))) {
       orderId = Math.floor(10000000 + Math.random() * 90000000);
     } else {
       orderId = Number(orderId);
     }
 
-    // 7. Monta o registro sanitizado para o Supabase
+    // 7. Registro do Pedido
     const orderRecord = {
       id: orderId,
       customer: body.client_name || body.customer || 'Cliente Logzz',
@@ -83,10 +102,10 @@ export async function POST(req: NextRequest) {
         : ''
     };
 
-    // 8. Monta a URL REST válida do Supabase (sem parênteses quebrados)
+    // 8. Monta a URL REST válida do Supabase
     const restUrl = `\({SUPABASE_URL}/rest/v1/\){targetTable}`;
 
-    // 9. Envia para o Supabase via Upsert (insere novo ou atualiza existente)
+    // 9. Envia para o Supabase via Upsert
     const supabaseResponse = await fetch(restUrl, {
       method: 'POST',
       headers: {
@@ -100,41 +119,29 @@ export async function POST(req: NextRequest) {
 
     if (!supabaseResponse.ok) {
       const errDetails = await supabaseResponse.text();
-      console.error(`Erro ao inserir no Supabase (${targetTable}):`, errDetails);
-      return NextResponse.json({ 
+      console.error(`Erro no Supabase (${targetTable}):`, errDetails);
+      return res.status(400).json({ 
         success: false, 
         error: 'Erro retornado pelo banco Supabase',
         details: errDetails 
-      }, { status: 400 });
+      });
     }
 
     const savedData = await supabaseResponse.json();
 
-    return NextResponse.json({
+    return res.status(200).json({
       success: true,
       message: 'Pedido processado e salvo com sucesso!',
       table: targetTable,
       data: savedData
-    }, { status: 200 });
+    });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('Erro na execução do Webhook:', error);
-    return NextResponse.json({
+    return res.status(500).json({
       success: false,
       error: 'Erro interno ao processar webhook',
       message: error?.message || 'Erro desconhecido'
-    }, { status: 500 });
+    });
   }
-}
-
-// Suporte a requisição GET para teste rápido no navegador
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const slug = searchParams.get('slug') || 'master';
-  return NextResponse.json({
-    status: 'online',
-    message: 'BRYX Webhook API ativa e operacional',
-    slug_recebido: slug,
-    supabase_url: SUPABASE_URL
-  });
 }
