@@ -1,5 +1,5 @@
 // =========================================================================
-// BRYX SAAS — ENGINE DA WEBHOOK DA LOGZZ (VERCEL SERVERLESS)
+// BRYX SAAS — ENGINE DA WEBHOOK DA LOGZZ (VERCEL SERVERLESS AUTO-HEALING)
 // REPOSITÓRIO: henriqueprals-code/bh-webhook-api
 // ENDPOINT: https://bh-webhook-api.vercel.app/api/webhook?slug=SEU_SLUG
 // =========================================================================
@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     return res.status(200).json({
       status: 'online',
-      service: 'BRYX Logzz Webhook API Engine',
+      service: 'BRYX Logzz Webhook API Engine (Auto-Healing)',
       operation_slug: rawSlug,
       target_table: targetTable,
       endpoint_url: `https://bh-webhook-api.vercel.app/api/webhook?slug=${rawSlug}`,
@@ -96,10 +96,10 @@ module.exports = async (req, res) => {
 
     const rawStatus = (body.status || body.situacao || body.order_status || 'Agendado').trim();
 
-    const value = parseFloat(body.valor_total || body.total || body.valor || body.value || 0);
-    const commission = parseFloat(body.comissao || body.commission || body.valor_comissao || 0);
+    const totalVal = parseFloat(body.valor_total || body.total || body.valor || body.value || 0);
+    const commVal = parseFloat(body.comissao || body.commission || body.valor_comissao || 0);
 
-    const date = (
+    const dateVal = (
       body.data_criacao ||
       body.data_agendamento ||
       body.data_pedido ||
@@ -108,7 +108,7 @@ module.exports = async (req, res) => {
       new Date().toISOString().split('T')[0]
     ).split('T')[0];
 
-    const delivery_date = (
+    const deliveryVal = (
       body.data_entrega ||
       body.delivery_date ||
       body.data_prevista ||
@@ -120,46 +120,69 @@ module.exports = async (req, res) => {
     const utm_source = body.utm_source || body.utm?.source || '';
     const utm_medium = body.utm_medium || body.utm?.medium || '';
 
-    const payload = {
+    // Monta o payload inicial com suporte a 'total' e 'value'
+    let currentPayload = {
       id: orderId,
+      code: orderId,
       customer,
       phone,
       product,
       offer,
       status: rawStatus,
-      value,
-      commission,
-      date,
-      data_agendamento: date,
-      delivery_date: delivery_date || null,
+      total: totalVal,
+      value: totalVal,
+      commission: commVal,
+      date: dateVal,
+      data_agendamento: dateVal,
+      delivery_date: deliveryVal || null,
       utm_campaign,
       utm_source,
       utm_medium,
       updated_at: new Date().toISOString()
     };
 
-    // 4. Gravação no Supabase via REST API
+    // 4. Gravação com Auto-Healing no Supabase
     const supabaseEndpoint = `\({SUPABASE_URL}/rest/v1/\){targetTable}`;
+    let success = false;
+    let lastError = null;
 
-    const response = await fetch(supabaseEndpoint, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=representation'
-      },
-      body: JSON.stringify(payload)
-    });
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const response = await fetch(supabaseEndpoint, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates,return=representation'
+        },
+        body: JSON.stringify(currentPayload)
+      });
 
-    if (!response.ok) {
+      if (response.ok) {
+        success = true;
+        break;
+      }
+
       const errText = await response.text();
-      console.error(`Erro ao salvar no Supabase (${targetTable}):`, errText);
-      return res.status(response.status).json({
+      lastError = errText;
+
+      // Se a tabela não tiver a coluna, remove do objeto e reenvia automaticamente
+      const matchCol = errText.match(/Could not find the '([^']+)' column/i);
+      if (matchCol && matchCol) {
+        delete currentPayload[matchCol[1]];
+        continue;
+      } else {
+        break;
+      }
+    }
+
+    if (!success) {
+      console.error(`Erro ao salvar no Supabase (${targetTable}):`, lastError);
+      return res.status(400).json({
         success: false,
         error: 'Falha ao gravar pedido no banco',
         target_table: targetTable,
-        details: errText
+        details: lastError
       });
     }
 
