@@ -1,9 +1,8 @@
-// Configurações do Supabase da BRYX
-const SUPABASE_URL = (process.env.SUPABASE_URL || "https://nkueyeaqhfkzcepqbxkk.supabase.co").trim().replace(/\/+$/, '');
-const SUPABASE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "sb_publishable_MzEdLWuinPdJWASPBBIm9Q_tCP3ceY7").trim();
+// URL e Chave DIRETO do seu Supabase (ignora as variáveis corrompidas da Vercel)
+const SUPABASE_URL = "https://nkueyeaqhfkzcepqbxkk.supabase.co";
+const SUPABASE_KEY = "sb_publishable_MzEdLWuinPdJWASPBBIm9Q_tCP3ceY7";
 
 export default async function handler(req, res) {
-  // Configuração de CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -12,7 +11,6 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Resposta rápida para checagem GET no navegador
   if (req.method === 'GET') {
     const slug = (req.query?.slug || 'master').toLowerCase().trim();
     return res.status(200).json({
@@ -52,7 +50,7 @@ export default async function handler(req, res) {
     if (body.date_order) {
       const parts = String(body.date_order).trim().split(' ')[0].split('.');
       if (parts.length === 3) {
-        dataPedido = `\({parts}-\){parts}-${parts[0]}`;
+        dataPedido = parts + '-' + parts + '-' + parts[0];
       }
     }
 
@@ -60,18 +58,18 @@ export default async function handler(req, res) {
     if (body.date_delivery) {
       const parts = String(body.date_delivery).trim().split(' ')[0].split('.');
       if (parts.length === 3) {
-        dataEntrega = `\({parts}-\){parts}-${parts[0]}`;
+        dataEntrega = parts + '-' + parts + '-' + parts[0];
       }
     }
 
-    // 5. Produto
+    // 5. Produto e Código do Pedido
     const product = body.products?.main?.product_name || body.product_name || body.product || 'Produto Padrão';
     const orderCode = String(body.order_number || body.code || ('ord_' + Date.now()));
 
-    // 6. Monta o registro com as colunas exatas da sua tabela do Supabase
+    // 6. Monta o registro com as colunas reais da sua tabela
     const orderRecord = {
-      id: orderCode,                                                  // Texto: "ordzdgoy6"
-      code: orderCode,                                                // Texto: "ordzdgoy6"
+      id: orderCode,
+      code: orderCode,
       customer: body.client_name || body.customer || 'Cliente Logzz',
       phone: body.client_phone || body.phone || '',
       product: product,
@@ -82,20 +80,21 @@ export default async function handler(req, res) {
       delivery_date: dataEntrega
     };
 
-    // A tabela Master ('orders') exige a coluna user_id
+    // A tabela Master ('orders') exige user_id
     if (!isJhonyelly) {
       orderRecord.user_id = '516f255c-5b2a-4706-a0a9-d662c59c19b0';
     }
 
-    // 7. Envia para o Supabase via Upsert (atualiza se o pedido já existir)
-    const restUrl = `\({SUPABASE_URL}/rest/v1/\){targetTable}`;
+    // 7. Monta a URL direta do Supabase (concatenação limpa)
+    const restUrl = "https://nkueyeaqhfkzcepqbxkk.supabase.co/rest/v1/" + targetTable;
 
+    // 8. Envia para o Supabase
     const supabaseResponse = await fetch(restUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
         'Prefer': 'resolution=merge-duplicates,return=representation'
       },
       body: JSON.stringify([orderRecord])
@@ -103,7 +102,7 @@ export default async function handler(req, res) {
 
     if (!supabaseResponse.ok) {
       const errDetails = await supabaseResponse.text();
-      console.error(`Erro Supabase (${targetTable}):`, errDetails);
+      console.error('Erro retornado pelo Supabase:', errDetails);
       return res.status(400).json({ 
         success: false, 
         error: 'Erro retornado pelo Supabase',
