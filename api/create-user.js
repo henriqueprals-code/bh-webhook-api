@@ -1,10 +1,16 @@
-// Vercel: api/create-user.js.
-// SUPABASE_SERVICE_ROLE_KEY fica somente nas variáveis do servidor.
+// Vercel: api/create-user.js
+// SUPABASE_SERVICE_ROLE_KEY fica somente no servidor.
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader(
+    'Access-Control-Allow-Methods',
+    'GET, POST, PATCH, OPTIONS'
+  );
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization'
+  );
   res.setHeader('Cache-Control', 'no-store');
 
   if (req.method === 'OPTIONS') {
@@ -49,6 +55,7 @@ export default async function handler(req, res) {
     });
 
     const raw = await response.text();
+
     let data;
 
     try {
@@ -71,7 +78,7 @@ export default async function handler(req, res) {
 
   const encoded = encodeURIComponent;
 
-  const webhook = async (slug) => {
+  const webhook = async slug => {
     const [record] = await read(
       'bryx_webhook_credentials',
       `operation_slug=eq.${encoded(slug)}&select=token`
@@ -149,7 +156,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Assinantes recebem somente o próprio webhook.
     if (req.method === 'GET' && !actor.is_admin) {
       return res.status(200).json({
         success: true,
@@ -164,7 +170,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Lista administrativa, sem retornar senhas.
     if (req.method === 'GET') {
       const memberships = await read(
         'bryx_memberships',
@@ -194,9 +199,10 @@ export default async function handler(req, res) {
       });
     }
 
-    const body = typeof req.body === 'string'
-      ? JSON.parse(req.body)
-      : (req.body || {});
+    const body =
+      typeof req.body === 'string'
+        ? JSON.parse(req.body)
+        : req.body || {};
 
     const name = String(body.name || '').trim();
     const due = body.due_date || null;
@@ -222,28 +228,30 @@ export default async function handler(req, res) {
       });
     }
 
-    if (!['Ativo', 'Inativo'].includes(body.status || 'Ativo')) {
+    if (
+      !['Ativo', 'Inativo'].includes(body.status || 'Ativo')
+    ) {
       return res.status(400).json({
         success: false,
         error: 'Status inválido.'
       });
     }
 
-    const password = body.password === undefined
-      ? ''
-      : String(body.password);
+    const password =
+      body.password === undefined
+        ? ''
+        : String(body.password);
 
     if (
       (req.method === 'POST' || password) &&
-      (password.length < 12 || password.length > 128)
+      (password.length < 8 || password.length > 128)
     ) {
       return res.status(400).json({
         success: false,
-        error: 'A senha deve ter entre 12 e 128 caracteres.'
+        error: 'A senha deve ter entre 8 e 128 caracteres.'
       });
     }
 
-    // Editar nome, assinatura, status ou redefinir senha.
     if (req.method === 'PATCH') {
       const id = String(body.id || '');
 
@@ -266,15 +274,16 @@ export default async function handler(req, res) {
         });
       }
 
-      if (target.is_admin && body.status === 'Inativo') {
+      if (
+        target.is_admin &&
+        body.status === 'Inativo'
+      ) {
         return res.status(400).json({
           success: false,
           error: 'O administrador não pode ser inativado.'
         });
       }
 
-      // Após ativar o isolamento, a RLS verifica este status
-      // em cada acesso ao banco, inclusive com sessão já aberta.
       const [saved] = await call(
         `/rest/v1/bryx_memberships?user_id=eq.${encoded(id)}`,
         'PATCH',
@@ -297,34 +306,39 @@ export default async function handler(req, res) {
 
           password_updated = true;
         } catch {
+          const operations = await read(
+            'bryx_operations',
+            'select=slug,name'
+          );
+
           return res.status(200).json({
             success: true,
-            user: toUser(
-              saved,
-              await read('bryx_operations', 'select=slug,name')
-            ),
+            user: toUser(saved, operations),
             warning:
-              'Cadastro salvo, mas a senha não foi alterada. ' +
-              'Tente redefini-la novamente.'
+              'Cadastro salvo, mas a senha não foi alterada. Tente redefini-la novamente.'
           });
         }
       }
 
+      const operations = await read(
+        'bryx_operations',
+        'select=slug,name'
+      );
+
       return res.status(200).json({
         success: true,
         user: {
-          ...toUser(
-            saved,
-            await read('bryx_operations', 'select=slug,name')
-          ),
+          ...toUser(saved, operations),
           webhook_url: await webhook(saved.operation_slug)
         },
         password_updated
       });
     }
 
-    // Criar usuário e provisionar sua operação.
-    const email = String(body.email || '').trim().toLowerCase();
+    const email = String(body.email || '')
+      .trim()
+      .toLowerCase();
+
     const operation = String(body.operation || '').trim();
     const attach = body.attach_existing === true;
 
@@ -357,24 +371,24 @@ export default async function handler(req, res) {
         });
       }
 
-      const existingMemberships = await read(
+      const existing = await read(
         'bryx_memberships',
         'operation_slug=eq.jhonyelly&select=user_id'
       );
 
-      if (existingMemberships.length) {
+      if (existing.length) {
         return res.status(409).json({
           success: false,
           error: 'Jhonyelly já foi vinculada.'
         });
       }
     } else {
-      const existingOperations = await read(
+      const existing = await read(
         'bryx_operations',
         `slug=eq.${encoded(slug)}&select=slug`
       );
 
-      if (existingOperations.length) {
+      if (existing.length) {
         return res.status(409).json({
           success: false,
           error:
@@ -397,11 +411,12 @@ export default async function handler(req, res) {
         }
       );
     } catch (error) {
-      return res.status(error.status === 422 ? 409 : 400).json({
+      return res.status(
+        error.status === 422 ? 409 : 400
+      ).json({
         success: false,
         error:
-          'Não foi possível criar o acesso. Verifique se o e-mail ' +
-          'já existe e se a senha atende à política do Supabase.'
+          'Não foi possível criar o acesso. Verifique se o e-mail já existe e se a senha atende à política do Supabase.'
       });
     }
 
@@ -423,8 +438,6 @@ export default async function handler(req, res) {
         args
       );
     } catch {
-      // A resposta pode ter sido perdida depois do commit.
-      // Confere o vínculo antes de considerar o cadastro pendente.
       const rows = await read(
         'bryx_memberships',
         `user_id=eq.${encoded(newAuth.id)}&select=*`
@@ -436,9 +449,7 @@ export default async function handler(req, res) {
           pending: true,
           user_id: newAuth.id,
           error:
-            'O acesso foi criado, mas o provisionamento não foi ' +
-            'confirmado. Não cadastre de novo: confira o SQL e ' +
-            'use o procedimento de recuperação com o ID: ' +
+            'O acesso foi criado, mas o provisionamento não foi confirmado. Não cadastre de novo: confira o SQL e use o procedimento de recuperação com o ID: ' +
             newAuth.id
         });
       }
@@ -449,24 +460,28 @@ export default async function handler(req, res) {
       `user_id=eq.${encoded(newAuth.id)}&select=*`
     );
 
+    const operations = await read(
+      'bryx_operations',
+      'select=slug,name'
+    );
+
     return res.status(201).json({
       success: true,
       user: {
-        ...toUser(
-          membership,
-          await read('bryx_operations', 'select=slug,name')
-        ),
+        ...toUser(membership, operations),
         webhook_url: await webhook(slug)
       }
     });
   } catch (error) {
-    console.error('BRYX users API:', error.status || 'internal');
+    console.error(
+      'BRYX users API:',
+      error.status || 'internal'
+    );
 
     return res.status(500).json({
       success: false,
       error:
-        'Não foi possível concluir. Confira a configuração ' +
-        'e os logs do servidor.'
+        'Não foi possível concluir. Confira a configuração e os logs do servidor.'
     });
   }
 }
