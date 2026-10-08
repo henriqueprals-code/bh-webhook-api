@@ -1,216 +1,292 @@
-const SUPABASE_URL = "https://nkueyeaqhfkzcepqbxkk.supabase.co";
-const SUPABASE_KEY = "sb_publishable_MzEdLWuinPdJWASPBBIm9Q_tCP3ceY7";
+import { timingSafeEqual } from 'node:crypto';
 
-function money(value) {
-  const text = String(value ?? "0").trim();
-  const number = Number(
-    text.includes(",")
-      ? text.replace(/\./g, "").replace(",", ".")
-      : text
-  );
-  return Number.isFinite(number) ? number : 0;
-}
+const money = value => {
+  let text = String(value)
+    .trim()
+    .replace(/R\$\s*/g, '')
+    .replace(/\s/g, '');
 
-function dateISO(value) {
-  if (!value) return null;
-
-  const text = String(value).trim();
-  const br = text.match(/^(\d{2})[./](\d{2})[./](\d{4})(?:\s|$)/);
-  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:T|\s|$)/);
-
-  if (!br && !iso) return null;
-
-  const year = Number(br ? br[3] : iso[1]);
-  const month = Number(br ? br[2] : iso[2]);
-  const day = Number(br ? br[1] : iso[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
+  if (text.includes(',')) {
+    text = text.replace(/\./g, '').replace(',', '.');
   }
 
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
+  const number = Number(text);
+
+  if (!Number.isFinite(number)) {
+    throw new Error('Valor inválido');
+  }
+
+  return number;
+};
+
+const date = value => {
+  const match = String(value)
+    .trim()
+    .split(' ')[0]
+    .match(/^(\d{2})[./](\d{2})[./](\d{4})$/);
+
+  const iso = match
+    ? `${match[3]}-${match[2]}-${match[1]}`
+    : String(value).slice(0, 10);
+
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(iso) ||
+    !Number.isFinite(Date.parse(iso)) ||
+    new Date(iso).toISOString().slice(0, 10) !== iso
+  ) {
+    throw new Error('Data inválida');
+  }
+
+  return iso;
+};
+
+const first = (...values) =>
+  values.find(
+    value =>
+      value !== undefined &&
+      value !== null &&
+      value !== ''
+  );
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization"
-  );
+  res.setHeader('Cache-Control', 'no-store');
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  const slug = String(req.query?.slug || "master")
-    .toLowerCase()
-    .trim();
-
-  if (!["master", "jhonyelly"].includes(slug)) {
-    return res.status(400).json({
-      success: false,
-      error: "Operação desconhecida"
-    });
-  }
-
-  if (req.method === "GET") {
+  if (req.method === 'GET') {
     return res.status(200).json({
-      status: "online",
-      message: "BRYX Webhook API ativa e operacional",
-      slug_recebido: slug,
-      supabase_url: SUPABASE_URL
+      status: 'online',
+      message: 'BRYX Webhook API ativa'
     });
   }
 
-  if (req.method !== "POST") {
+  if (req.method !== 'POST') {
     return res.status(405).json({
       success: false,
-      error: "Método não permitido"
+      error: 'Utilize POST.'
     });
   }
 
-  let body;
+  const url = process.env.SUPABASE_URL?.replace(/\/$/, '');
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  try {
-    body = typeof req.body === "string"
-      ? JSON.parse(req.body)
-      : req.body;
-  } catch {
-    return res.status(400).json({
+  if (!url || !key) {
+    return res.status(503).json({
       success: false,
-      error: "JSON inválido"
+      error: 'Configuração indisponível.'
     });
   }
 
-  if (
-    !body ||
-    typeof body !== "object" ||
-    Array.isArray(body) ||
-    !Object.keys(body).length
-  ) {
-    return res.status(400).json({
-      success: false,
-      error: "Payload vazio ou inválido"
-    });
-  }
-
-  const orderCode = String(
-    body.order_number || body.code || ""
-  ).trim();
-
-  if (!orderCode) {
-    return res.status(400).json({
-      success: false,
-      error: "Código do pedido ausente"
-    });
-  }
-
-  const dateOrder = dateISO(body.date_order);
-  const dateDelivery = dateISO(body.date_delivery);
-
-  if (
-    (body.date_order && !dateOrder) ||
-    (body.date_delivery && !dateDelivery)
-  ) {
-    return res.status(400).json({
-      success: false,
-      error: "Data inválida no payload"
-    });
-  }
-
-  const isJhonyelly = slug === "jhonyelly";
-  const targetTable = isJhonyelly
-    ? "orders_jhonyelly"
-    : "orders";
-
-  const orderRecord = {
-    id: orderCode,
-    code: orderCode
-  };
-
-  const customer = body.client_name ?? body.customer;
-  const phone = body.client_phone ?? body.phone;
-  const product =
-    body.products?.main?.product_name ??
-    body.product_name ??
-    body.product;
-  const total =
-    body.order_final_price ??
-    body.total ??
-    body.price;
-  const commission =
-    body.affiliate_commission ??
-    body.commission ??
-    body.producer_commission;
-
-  // Atualiza somente os campos presentes no evento.
-  if (customer != null) orderRecord.customer = customer;
-  if (phone != null) orderRecord.phone = phone;
-  if (product != null) orderRecord.product = product;
-  if (total != null) orderRecord.total = money(total);
-  if (commission != null) {
-    orderRecord.commission = money(commission);
-  }
-  if (body.order_status) {
-    orderRecord.status = body.order_status;
-  }
-  if (dateOrder) orderRecord.date = dateOrder;
-  if (dateDelivery) {
-    orderRecord.delivery_date = dateDelivery;
-  }
-
-  if (!isJhonyelly) {
-    orderRecord.user_id =
-      "516f255c-5b2a-4706-a0a9-d662c59c19b0";
-  }
-
-  try {
+  const call = async (path, method = 'GET', body) => {
     const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/${targetTable}?on_conflict=id`,
+      url + '/rest/v1/' + path,
       {
-        method: "POST",
+        method,
         headers: {
-          "Content-Type": "application/json",
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          Prefer: "resolution=merge-duplicates,return=representation"
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=merge-duplicates,return=minimal'
         },
-        body: JSON.stringify([orderRecord])
+        ...(body === undefined
+          ? {}
+          : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(20000)
       }
     );
 
-    if (!response.ok) {
-      const details = await response.text();
-      console.error("Erro retornado pelo Supabase:", details);
+    const raw = await response.text();
 
-      return res.status(400).json({
+    if (!response.ok) {
+      const error = new Error('Banco indisponível');
+      error.status = response.status;
+      throw error;
+    }
+
+    return raw ? JSON.parse(raw) : null;
+  };
+
+  try {
+    const slug = String(req.query?.slug || '')
+      .trim()
+      .toLowerCase();
+
+    const token = String(req.query?.token || '');
+
+    if (
+      !/^[a-z][a-z0-9_]{0,39}$/.test(slug) ||
+      !/^[a-f0-9]{64}$/.test(token)
+    ) {
+      return res.status(401).json({
         success: false,
-        error: "Erro retornado pelo Supabase",
-        details
+        error: 'Webhook não autorizado.'
       });
     }
 
-    const data = await response.json();
+    const [credential] = await call(
+      'bryx_webhook_credentials?' +
+      `operation_slug=eq.${encodeURIComponent(slug)}` +
+      '&select=token'
+    );
+
+    if (
+      !credential ||
+      Buffer.byteLength(credential.token) !==
+        Buffer.byteLength(token) ||
+      !timingSafeEqual(
+        Buffer.from(credential.token),
+        Buffer.from(token)
+      )
+    ) {
+      return res.status(401).json({
+        success: false,
+        error: 'Webhook não autorizado.'
+      });
+    }
+
+    const [operation] = await call(
+      'bryx_operations?' +
+      `slug=eq.${encodeURIComponent(slug)}` +
+      '&select=slug'
+    );
+
+    if (!operation) {
+      return res.status(401).json({
+        success: false,
+        error: 'Webhook não autorizado.'
+      });
+    }
+
+    const body =
+      typeof req.body === 'string'
+        ? JSON.parse(req.body)
+        : req.body;
+
+    if (
+      !body ||
+      Array.isArray(body) ||
+      typeof body !== 'object' ||
+      !Object.keys(body).length
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'Payload vazio ou inválido.'
+      });
+    }
+
+    const code = String(
+      first(body.order_number, body.code) || ''
+    ).trim();
+
+    if (!code || code.length > 160) {
+      return res.status(400).json({
+        success: false,
+        error: 'Código do pedido obrigatório.'
+      });
+    }
+
+    const table =
+      slug === 'master' ? 'orders' : 'orders_' + slug;
+
+    const [existing] = await call(
+      `${table}?id=eq.${encodeURIComponent(code)}&select=id`
+    );
+
+    const record = {
+      id: code,
+      code,
+      updated_at: new Date().toISOString()
+    };
+
+    const set = (
+      column,
+      value,
+      transform = value => value
+    ) => {
+      if (value !== undefined && value !== null) {
+        record[column] = transform(value);
+      }
+    };
+
+    set('customer', first(body.client_name, body.customer));
+    set('phone', first(body.client_phone, body.phone));
+
+    set(
+      'product',
+      first(
+        body.products?.main?.product_name,
+        body.product_name,
+        body.product
+      )
+    );
+
+    set(
+      'total',
+      first(
+        body.order_final_price,
+        body.total,
+        body.price
+      ),
+      money
+    );
+
+    set(
+      'commission',
+      first(
+        body.affiliate_commission,
+        body.commission,
+        body.producer_commission
+      ),
+      money
+    );
+
+    set('status', body.order_status);
+    set('date', body.date_order, date);
+    set('delivery_date', body.date_delivery, date);
+
+    if (!existing) {
+      record.customer ??= 'Cliente Logzz';
+      record.phone ??= '';
+      record.product ??= 'Produto Logzz';
+      record.total ??= 0;
+      record.commission ??= 0;
+      record.status ??= 'Agendado';
+      record.date ??= new Date().toISOString().slice(0, 10);
+      record.delivery_date ??= record.date;
+    }
+
+    if (slug === 'master') {
+      record.user_id =
+        '516f255c-5b2a-4706-a0a9-d662c59c19b0';
+    }
+
+    // O webhook continua recebendo eventos mesmo
+    // quando o acesso do assinante está inativo.
+    await call(
+      `${table}?on_conflict=id`,
+      'POST',
+      [record]
+    );
 
     return res.status(200).json({
       success: true,
-      message: "Pedido processado e sincronizado com sucesso!",
-      table: targetTable,
-      data
+      message: 'Pedido sincronizado.'
     });
   } catch (error) {
-    console.error("Erro na execução do Webhook:", error);
+    console.error(
+      'BRYX webhook:',
+      error.status || error.name
+    );
 
-    return res.status(500).json({
+    const invalidPayload =
+      error instanceof SyntaxError ||
+      error.message === 'Valor inválido' ||
+      error.message === 'Data inválida';
+
+    return res.status(
+      invalidPayload ? 400 : 503
+    ).json({
       success: false,
-      error: "Erro interno ao processar webhook",
-      message: error?.message || "Erro desconhecido"
+      error:
+        'Não foi possível processar o pedido. A Logzz pode reenviar.'
     });
   }
 }
