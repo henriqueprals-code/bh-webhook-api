@@ -156,6 +156,25 @@ export default async function handler(req, res) {
       });
     }
 
+    const requestBody = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+    // Única alteração de configuração disponível ao assinante: nome exibido.
+    // O vínculo vem da sessão validada, nunca de um slug enviado pelo cliente.
+    if (req.method === 'PATCH' && requestBody.action === 'rename_operation') {
+      if (Object.keys(requestBody).some(key => !['action', 'operation'].includes(key))) {
+        return res.status(400).json({ success: false, error: 'Altere somente o nome da operação.' });
+      }
+      const operation = String(requestBody.operation || '').trim();
+      if (!operation || operation.length > 120 || /[\u0000-\u001f]/.test(operation)) {
+        return res.status(400).json({ success: false, error: 'Informe um nome de operação de até 120 caracteres.' });
+      }
+      const [savedOperation] = await call(
+        `/rest/v1/bryx_operations?slug=eq.${encoded(actor.operation_slug)}`,
+        'PATCH', { name: operation }
+      );
+      if (!savedOperation || savedOperation.slug !== actor.operation_slug) throw new Error('Operação não encontrada.');
+      return res.status(200).json({ success: true, operation: savedOperation.name });
+    }
+
     if (req.method === 'GET' && !actor.is_admin) {
       return res.status(200).json({
         success: true,
@@ -199,10 +218,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const body =
-      typeof req.body === 'string'
-        ? JSON.parse(req.body)
-        : req.body || {};
+    const body = requestBody;
 
     const name = String(body.name || '').trim();
     const due = body.due_date || null;
@@ -282,6 +298,18 @@ export default async function handler(req, res) {
           success: false,
           error: 'O administrador não pode ser inativado.'
         });
+      }
+
+      if (body.operation !== undefined) {
+        const displayName = String(body.operation).trim();
+        if (!displayName || displayName.length > 120 || /[\u0000-\u001f]/.test(displayName)) {
+          return res.status(400).json({ success: false, error: 'Nome da operação inválido.' });
+        }
+        const [renamed] = await call(
+          `/rest/v1/bryx_operations?slug=eq.${encoded(target.operation_slug)}`,
+          'PATCH', { name: displayName }
+        );
+        if (!renamed) throw new Error('Operação não encontrada.');
       }
 
       const [saved] = await call(
@@ -485,3 +513,4 @@ export default async function handler(req, res) {
     });
   }
 }
+
