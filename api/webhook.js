@@ -40,6 +40,28 @@ const date = value => {
   return iso;
 };
 
+// Horário original da Logzz.
+// Sem hora no payload, não inventa meia-noite.
+const orderTime = value => {
+  const text = String(value ?? '').trim();
+
+  const match = text.match(
+    /^(\d{2})[./](\d{2})[./](\d{4})[ T](\d{2}):(\d{2}):(\d{2})$/
+  );
+
+  if (!match) return null;
+
+  if (
+    Number(match[4]) > 23 ||
+    Number(match[5]) > 59 ||
+    Number(match[6]) > 59
+  ) {
+    return null;
+  }
+
+  return `${date(text)}T${match[4]}:${match[5]}:${match[6]}`;
+};
+
 const first = (...values) =>
   values.find(
     value =>
@@ -240,6 +262,7 @@ export default async function handler(req, res) {
 
     set('status', body.order_status);
     set('date', body.date_order, date);
+    set('logzz_order_created_at', orderTime(body.date_order));
     set('delivery_date', body.date_delivery, date);
 
     if (!existing) {
@@ -258,12 +281,18 @@ export default async function handler(req, res) {
         '516f255c-5b2a-4706-a0a9-d662c59c19b0';
     }
 
-    // O webhook continua recebendo eventos mesmo
-    // quando o acesso do assinante está inativo.
+    // Continua recebendo eventos mesmo quando
+    // o acesso do assinante está inativo.
     await call(
-      `${table}?on_conflict=id`,
+      'rpc/bryx_connect_receive_logzz',
       'POST',
-      [record]
+      {
+        p_slug: slug,
+        p_record: record,
+        p_utm_id: typeof body.utm?.utm_id === 'string'
+          ? body.utm.utm_id.slice(0, 512)
+          : null
+      }
     );
 
     return res.status(200).json({
