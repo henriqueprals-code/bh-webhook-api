@@ -40,26 +40,24 @@ const date = value => {
   return iso;
 };
 
-// Horário original da Logzz.
-// Sem hora no payload, não inventa meia-noite.
+// Horário original da Logzz. Sem hora no payload, não inventa meia-noite.
 const orderTime = value => {
   const text = String(value ?? '').trim();
-
-  const match = text.match(
-    /^(\d{2})[./](\d{2})[./](\d{4})[ T](\d{2}):(\d{2}):(\d{2})$/
-  );
-
+  const match = text.match(/^(\d{2})[./](\d{2})[./](\d{4})[ T](\d{2}):(\d{2}):(\d{2})$/);
   if (!match) return null;
-
-  if (
-    Number(match[4]) > 23 ||
-    Number(match[5]) > 59 ||
-    Number(match[6]) > 59
-  ) {
-    return null;
-  }
-
+  if (Number(match[4]) > 23 || Number(match[5]) > 59 || Number(match[6]) > 59) return null;
   return `${date(text)}T${match[4]}:${match[5]}:${match[6]}`;
+};
+
+// Somente o evento Completo fornece o horário de conclusão neste formato.
+// Descrição ausente, textual ou inválida não impede receber o pedido.
+const completionTime = (status, value) => {
+  if (String(status ?? '').trim().toLowerCase() !== 'completo') return null;
+  const m = String(value ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if (!m || Number(m[4]) > 23 || Number(m[5]) > 59 || Number(m[6]) > 59) return null;
+  const day = `${m[1]}-${m[2]}-${m[3]}`;
+  if (!Number.isFinite(Date.parse(day)) || new Date(day).toISOString().slice(0, 10) !== day) return null;
+  return `${day}T${m[4]}:${m[5]}:${m[6]}`;
 };
 
 const first = (...values) =>
@@ -261,6 +259,7 @@ export default async function handler(req, res) {
     );
 
     set('status', body.order_status);
+    set('logzz_completed_at', completionTime(body.order_status, body.order_status_description));
     set('date', body.date_order, date);
     set('logzz_order_created_at', orderTime(body.date_order));
     set('delivery_date', body.date_delivery, date);
@@ -281,8 +280,8 @@ export default async function handler(req, res) {
         '516f255c-5b2a-4706-a0a9-d662c59c19b0';
     }
 
-    // Continua recebendo eventos mesmo quando
-    // o acesso do assinante está inativo.
+    // O webhook continua recebendo eventos mesmo
+    // quando o acesso do assinante está inativo.
     await call(
       'rpc/bryx_connect_receive_logzz',
       'POST',
@@ -319,3 +318,4 @@ export default async function handler(req, res) {
     });
   }
 }
+
