@@ -258,6 +258,12 @@ export default async function handler(req, res) {
       money
     );
 
+    // Metadados virtuais: o RPC os remove antes de gravar a tabela de pedidos.
+    const description=String(body.order_status_description || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    if (/pedido recriado automaticamente devido a expiracao do pedido principal/.test(description)) {
+      record.logzz_recreated=true;
+      if(typeof body.main_order_number==='string' && body.main_order_number.trim()) record.logzz_previous_order=body.main_order_number.trim();
+    }
     set('status', body.order_status);
     set('logzz_completed_at', completionTime(body.order_status, body.order_status_description));
     set('date', body.date_order, date);
