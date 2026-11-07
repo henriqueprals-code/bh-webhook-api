@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { sendMetaPurchase } from '../lib/meta-purchase.js';
 
 const money = value => {
   let text = String(value)
@@ -288,7 +289,7 @@ export default async function handler(req, res) {
 
     // O webhook continua recebendo eventos mesmo
     // quando o acesso do assinante está inativo.
-    await call(
+    const receipt = await call(
       'rpc/bryx_connect_receive_logzz',
       'POST',
       {
@@ -299,6 +300,15 @@ export default async function handler(req, res) {
           : null
       }
     );
+
+    if (
+      slug === 'master' &&
+      receipt?.synced === true &&
+      receipt.tracking === 'linked' &&
+      String(record.status ?? '').trim().toLowerCase() === 'completo'
+    ) {
+      await sendMetaPurchase(call, code);
+    }
 
     return res.status(200).json({
       success: true,
