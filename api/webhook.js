@@ -105,7 +105,9 @@ export default async function handler(req, res) {
           apikey: key,
           Authorization: `Bearer ${key}`,
           'Content-Type': 'application/json',
-          Prefer: 'resolution=merge-duplicates,return=minimal'
+          Prefer: path.startsWith('rpc/')
+            ? 'return=representation'
+            : 'resolution=merge-duplicates,return=minimal'
         },
         ...(body === undefined
           ? {}
