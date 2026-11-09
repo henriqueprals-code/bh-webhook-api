@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { sendMetaPurchase } from '../lib/meta-purchase.js';
+import { sendMetaPurchase, sendSubscriberPurchase } from '../lib/meta-purchase.js';
 
 const money = value => {
   let text = String(value)
@@ -304,12 +304,12 @@ export default async function handler(req, res) {
     );
 
     if (
-      slug === 'master' &&
       receipt?.synced === true &&
       receipt.tracking === 'linked' &&
       String(record.status ?? '').trim().toLowerCase() === 'completo'
     ) {
-      await sendMetaPurchase(call, code);
+      if (slug === 'master') await sendMetaPurchase(call, code);
+      else await sendSubscriberPurchase(call, slug, code);
     }
 
     return res.status(200).json({
