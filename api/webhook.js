@@ -306,7 +306,8 @@ export default async function handler(req, res) {
     if (
       receipt?.synced === true &&
       receipt.tracking === 'linked' &&
-      String(record.status ?? '').trim().toLowerCase() === 'completo'
+      (String(record.status ?? '').trim().toLowerCase() === 'completo' ||
+        (record.status == null && record.commission != null))
     ) {
       if (slug === 'master') await sendMetaPurchase(call, code);
       else await sendSubscriberPurchase(call, slug, code);
